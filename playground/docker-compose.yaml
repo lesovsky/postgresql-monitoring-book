@@ -1,0 +1,99 @@
+version: "3.9"
+
+volumes:
+  primary_data:
+  standby_data:
+  metrics_data:
+  grafana_data:
+
+services:
+  primary:
+    build: ./postgres
+    volumes:
+      - primary_data:/var/lib/postgresql/data:rw
+      - ./postgres/primary-initdb.sh:/docker-entrypoint-initdb.d/initdb.sh
+      - ./scripts:/var/lib/postgresql/scripts:ro
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: "trust"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  standby:
+    build: ./postgres
+    volumes:
+      - standby_data:/var/lib/postgresql/data:rw
+      - ./postgres/standby-entrypoint.sh:/docker-entrypoint.sh
+      - ./scripts:/var/lib/postgresql/scripts:ro
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: "trust"
+    entrypoint: ["/docker-entrypoint.sh"]
+    command: ["su-exec", "postgres", "postgres"]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready" ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    depends_on: [ primary ]
+
+  app1:
+    image: postgres:15
+    command: bash -c "until pg_isready -h primary; do sleep 1; done && while true ; do pgbench -P 60 -c 1 -R 5 -T 36000 -h primary -U pgbench pgbench; done"
+    depends_on: [ primary, standby ]
+
+  app2:
+    image: postgres:15
+    command: bash -c "until pg_isready -h primary; do sleep 1; done && while true ; do pgbench -n -P 60 -c $$(shuf -i 1-5 -n 1) -R $$(shuf -i 1-5 -n 1) -T $$(shuf -i 100-180 -n 1) -h primary -U serral pgbench; done"
+    depends_on: [ primary, standby ]
+
+  app3:
+    image: postgres:15
+    command: bash -c "until pg_isready -h primary; do sleep 1; done && while true ; do pgbench -n -P 60 -c $$(shuf -i 9-15 -n 1) -R $$(shuf -i 8-12 -n 1) -T $$(shuf -i 250-330 -n 1) -h primary -U maru pgbench; done"
+    depends_on: [ primary, standby ]
+
+  app4:
+    image: postgres:15
+    command: bash -c "until pg_isready -h primary; do sleep 1; done && while true ; do pgbench -n -P 60 -c $$(shuf -i 19-25 -n 1) -R $$(shuf -i 16-20 -n 1) -T $$(shuf -i 400-600 -n 1) -h primary -U classic pgbench; done"
+    depends_on: [ primary, standby ]
+
+  pgscv:
+    image: lesovsky/pgscv:v0.8.0-beta.6
+    ports: [ "9890:9890" ]
+    volumes:
+      - ./pgscv/pgscv.yaml:/etc/pgscv.yaml
+    environment:
+      PGSCV_CONFIG_FILE: "/etc/pgscv.yaml"
+    depends_on:
+      primary:
+        condition: service_healthy
+      standby:
+        condition: service_healthy
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.89.0
+    volumes:
+      - metrics_data:/data
+    command: [ "-storageDataPath=/data", "-retentionPeriod=2d" ]
+
+  vmagent:
+    image: victoriametrics/vmagent:v1.89.0
+    volumes:
+      - ./victoriametrics/vmagent.yaml:/etc/vmagent.yaml
+    command: [ "-promscrape.config=/etc/vmagent.yaml", "-remoteWrite.url=http://victoriametrics:8428/api/v1/write" ]
+    depends_on: [ victoriametrics ]
+
+  grafana:
+    image: grafana/grafana:9.3.6
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_NAME: "Main Org."
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_USERS_DEFAULT_THEME: light
+    ports: [ "3000:3000" ]
+    depends_on: [ vmagent ]

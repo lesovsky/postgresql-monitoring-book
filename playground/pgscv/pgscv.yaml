@@ -1,0 +1,56 @@
+listen_address: 0.0.0.0:9890
+disable_collectors:
+  - system
+services:
+  primary:
+    service_type: "postgres"
+    conninfo: "host=primary port=5432 dbname=postgres user=stats"
+  standby:
+    service_type: "postgres"
+    conninfo: "host=standby port=5432 dbname=postgres user=stats"
+collectors:
+  postgres/custom:
+    subsystems:
+      connected_clients:
+        query: |
+          SELECT coalesce(host(client_addr), 'local') AS address, usename AS user, datname AS database, count(*) AS total 
+          FROM pg_stat_activity
+          WHERE backend_type = 'client backend'
+          GROUP BY 1,2,3
+        metrics:
+          - name: total
+            usage: GAUGE
+            value: total
+            labels: [ address, user, database ]
+            description: "Number of client connections established to instance per address, user and database."
+      shared_buffers_all:
+        query: |
+          SELECT
+            count(*) FILTER (WHERE reldatabase IS NULL) * (SELECT current_setting('block_size')::int) AS free,
+            count(*) FILTER (WHERE pinning_backends = 0 AND isdirty = 'f') * (SELECT current_setting('block_size')::int) AS clean,
+            count(*) FILTER (WHERE pinning_backends > 0 AND isdirty = 'f') * (SELECT current_setting('block_size')::int) AS clean_pinned,
+            count(*) FILTER (WHERE pinning_backends = 0 AND isdirty = 't') * (SELECT current_setting('block_size')::int) AS dirty,
+            count(*) FILTER (WHERE pinning_backends > 0 AND isdirty = 't') * (SELECT current_setting('block_size')::int) AS dirty_pinned
+          FROM pg_buffercache
+        metrics:
+          - name: usage_bytes
+            usage: GAUGE
+            labeled_values:
+              buffers: [ free, clean, clean_pinned, dirty, dirty_pinned ]
+            description: "Total number of buffers in shared memory, in bytes."
+      shared_buffers_database:
+        query: |
+          SELECT
+              coalesce((SELECT datname FROM pg_database WHERE coalesce(oid, 0) = reldatabase), 'NULL') AS database,
+              count(*) FILTER (WHERE isdirty) * (SELECT current_setting('block_size')::int) AS dirty,
+              count(*) FILTER (WHERE NOT isdirty) * (SELECT current_setting('block_size')::int) AS clean              
+          FROM pg_buffercache
+          WHERE reldatabase IS NOT NULL
+          GROUP BY reldatabase
+        metrics:
+          - name: usage_bytes
+            usage: GAUGE
+            labeled_values:
+              buffers: [ dirty, clean ]
+            labels: [ database ]
+            description: "Total number of buffers in shared memory used by databases, in bytes."
