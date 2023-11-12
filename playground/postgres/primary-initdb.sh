@@ -17,6 +17,7 @@ psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<-EOSQL
   \c pgbench
   CREATE EXTENSION IF NOT EXISTS pg_buffercache;
   CREATE EXTENSION IF NOT EXISTS pgstattuple;
+  CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
   \c pgbench pgbench
   ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO public;
   ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO public;
