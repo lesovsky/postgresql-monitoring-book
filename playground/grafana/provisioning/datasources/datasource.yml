@@ -9,3 +9,17 @@ datasources:
     basicAuth: false
     isDefault: true
     editable: true
+
+  - name: primary
+    type: postgres
+    url: primary:5432
+    user: postgres
+    jsonData:
+      database: postgres
+      sslmode: 'disable' # disable/require/verify-ca/verify-full
+      maxOpenConns: 100 # Grafana v5.4+
+      maxIdleConns: 100 # Grafana v5.4+
+      maxIdleConnsAuto: true # Grafana v9.5.1+
+      connMaxLifetime: 14400 # Grafana v5.4+
+      postgresVersion: 1500 # 903=9.3, 904=9.4, 905=9.5, 906=9.6, 1000=10
+      timescaledb: false

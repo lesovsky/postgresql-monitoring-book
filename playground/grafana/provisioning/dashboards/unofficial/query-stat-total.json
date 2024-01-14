@@ -1,0 +1,143 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "postgres",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 5,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": true,
+      "title": "query_stat_total_13.sql",
+      "tooltip": "",
+      "type": "link",
+      "url": "https://github.com/dataegret/pg-utils/blob/master/sql/global_reports/query_stat_total_13.sql"
+    }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "P986A1B7135F49861"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unitScale": true
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 28,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": false
+      },
+      "pluginVersion": "9.3.6",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "P986A1B7135F49861"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "with pg_stat_statements_normalized as (\n    select *,\n    translate(\n    regexp_replace(\n    regexp_replace(\n    regexp_replace(\n    regexp_replace(query,\n    E'\\\\?(::[a-zA-Z_]+)?( *, *\\\\?(::[a-zA-Z_]+)?)+', '?', 'g'),\n    E'\\\\$[0-9]+(::[a-zA-Z_]+)?( *, *\\\\$[0-9]+(::[a-zA-Z_]+)?)*', '$N', 'g'),\n    E'--.*$', '', 'ng'),\n    E'/\\\\*.*?\\\\*/', '', 'g'),\n    E'\\r', '')\n    as query_normalized\n    --if current database is postgres then generate report for all databases otherwise generate for current database only\n    from pg_stat_statements where current_database() = 'postgres' or dbid in (SELECT oid from pg_database where datname=current_database())\n),\ntotals as (\n    select sum(total_plan_time + total_exec_time) AS total_time, sum(blk_read_time+blk_write_time) as io_time,\n    sum(total_plan_time + total_exec_time-blk_read_time-blk_write_time) as cpu_time, sum(calls) AS ncalls,\n    sum(rows) as total_rows FROM pg_stat_statements\n    WHERE current_database() = 'postgres' or dbid in (SELECT oid from pg_database where datname=current_database())\n),\n_pg_stat_statements as (\n    select\n    coalesce((select datname from pg_database where oid = p.dbid), 'unknown') as database,\n    coalesce((select rolname from pg_roles where oid = p.userid), 'unknown') as username,\n    --select shortest query, replace \\n\\n-- strings to avoid email clients format text as footer\n    substring(\n    translate(\n    replace(\n    (array_agg(query order by length(query)))[1],\n    E'-- \\n',\n    E'--\\n'),\n    E'\\r', ''),\n    1, 8192) as query,\n    sum(total_plan_time + total_exec_time) as total_time,\n    sum(blk_read_time) as blk_read_time, sum(blk_write_time) as blk_write_time,\n    sum(calls) as calls, sum(rows) as rows\n    from pg_stat_statements_normalized p\n    where calls > 0\n    group by dbid, userid, md5(query_normalized)\n),\ntotals_readable as (\n    select to_char(interval '1 millisecond' * total_time, 'HH24:MI:SS') as total_time,\n    (100*io_time/total_time)::numeric(20,2) AS io_time_percent,\n    to_char(ncalls, 'FM999,999,999,990') AS total_queries,\n    (select to_char(count(distinct md5(query)), 'FM999,999,990') from _pg_stat_statements) as unique_queries\n    from totals\n),\nstatements as (\n    select\n    (100*total_time/(select total_time from totals)) AS time_percent,\n    (100*(blk_read_time+blk_write_time)/(select greatest(io_time, 1) from totals)) AS io_time_percent,\n    (100*(total_time-blk_read_time-blk_write_time)/(select cpu_time from totals)) AS cpu_time_percent,\n    to_char(interval '1 millisecond' * total_time, 'HH24:MI:SS') AS total_time,\n    (total_time::numeric/calls)::numeric(20,2) AS avg_time,\n    ((total_time-blk_read_time-blk_write_time)::numeric/calls)::numeric(20, 2) AS avg_cpu_time,\n    ((blk_read_time+blk_write_time)::numeric/calls)::numeric(20, 2) AS avg_io_time,\n    to_char(calls, 'FM999,999,999,990') AS calls,\n    (100*calls/(select ncalls from totals))::numeric(20, 2) AS calls_percent,\n    to_char(rows, 'FM999,999,999,990') AS rows,\n    (100*rows/(select total_rows from totals))::numeric(20, 2) AS row_percent,\n    database,\n    username,\n    query\n    from _pg_stat_statements\n    where ((total_time-blk_read_time-blk_write_time)/(select cpu_time from totals)>=0.01 or (blk_read_time+blk_write_time)/(select greatest(io_time, 1) from totals)>=0.01 or calls/(select ncalls from totals)>=0.02 or rows/(select total_rows from totals)>=0.02)\nunion all\n    select\n    (100*sum(total_time)::numeric/(select total_time from totals)) AS time_percent,\n    (100*sum(blk_read_time+blk_write_time)::numeric/(select greatest(io_time, 1) from totals)) AS io_time_percent,\n    (100*sum(total_time-blk_read_time-blk_write_time)::numeric/(select cpu_time from totals)) AS cpu_time_percent,\n    to_char(interval '1 millisecond' * sum(total_time), 'HH24:MI:SS') AS total_time,\n    (sum(total_time)::numeric/sum(calls))::numeric(20,2) AS avg_time,\n    (sum(total_time-blk_read_time-blk_write_time)::numeric/sum(calls))::numeric(20, 2) AS avg_cpu_time,\n    (sum(blk_read_time+blk_write_time)::numeric/sum(calls))::numeric(20, 2) AS avg_io_time,\n    to_char(sum(calls), 'FM999,999,999,990') AS calls,\n    (100*sum(calls)/(select ncalls from totals))::numeric(20, 2) AS calls_percent,\n    to_char(sum(rows), 'FM999,999,999,990') AS rows,\n    (100*sum(rows)/(select total_rows from totals))::numeric(20, 2) AS row_percent,\n    'all' as database,\n    'all' as username,\n    'other' as query\n    from _pg_stat_statements\n    where not ((total_time-blk_read_time-blk_write_time)/(select cpu_time from totals)>=0.01 or (blk_read_time+blk_write_time)/(select greatest(io_time, 1) from totals)>=0.01 or calls/(select ncalls from totals)>=0.02 or rows/(select total_rows from totals)>=0.02)\n),\nstatements_readable as (\n    select row_number() over (order by s.time_percent desc) as pos,\n    to_char(time_percent, 'FM990.0') || '%' AS time_percent,\n    to_char(io_time_percent, 'FM990.0') || '%' AS io_time_percent,\n    to_char(cpu_time_percent, 'FM990.0') || '%' AS cpu_time_percent,\n    to_char(avg_io_time*100/(coalesce(nullif(avg_time, 0), 1)), 'FM990.0') || '%' AS avg_io_time_percent,\n    total_time, avg_time, avg_cpu_time, avg_io_time, calls, calls_percent, rows, row_percent,\n    database, username, query\n    from statements s where calls is not null\n),\n_ (s) AS (\nselect E'total time:\\t' || total_time || ' (IO: ' || io_time_percent || E'%)\\n' ||\nE'total queries:\\t' || total_queries || ' (unique: ' || unique_queries || E')\\n' ||\n'report for ' || (select case when current_database() = 'postgres' then 'all databases' else current_database() || ' database' end) || E', version 0.9.5' ||\n' @ PostgreSQL ' || (select setting from pg_settings where name='server_version') || E'\\ntracking ' || (select setting from pg_settings where name='pg_stat_statements.track') || ' ' ||\n(select setting from pg_settings where name='pg_stat_statements.max') || ' queries, utilities ' || (select setting from pg_settings where name='pg_stat_statements.track_utility') ||\n', logging ' || (select (case when setting = '0' then 'all' when setting = '-1' then 'none' when setting::int > 1000 then (setting::numeric/1000)::numeric(20, 1) || 's+' else setting || 'ms+' end) from pg_settings where name='log_min_duration_statement') || E' queries\\n' ||\n(select coalesce(string_agg('WARNING: database ' || datname || ' must be vacuumed within ' || to_char(2147483647 - age(datfrozenxid), 'FM999,999,999,990') || ' transactions', E'\\n' order by age(datfrozenxid) desc) || E'\\n', '')\n from pg_database where (2147483647 - age(datfrozenxid)) < 200000000) || E'\\n'\nfrom totals_readable\nunion all\n(select E'=============================================================================================================\\n' ||\n'pos:' || pos || E'\\t total time: ' || total_time || ' (' || time_percent || ', CPU: ' || cpu_time_percent || ', IO: ' || io_time_percent || E')\\t calls: ' || calls ||\n' (' || calls_percent || E'%)\\t avg_time: ' || avg_time || 'ms (IO: ' || avg_io_time_percent || E')\\n' ||\n'user: ' || username || E'\\t db: ' || database || E'\\t rows: ' || rows || ' (' || row_percent || '%)' || E'\\t query:\\n' || coalesce(query, 'unknown') || E'\\n'\n\nfrom statements_readable order by pos)\n)\nSELECT unnest(string_to_array(s, E'\\n')) as report from _\n",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "report",
+      "type": "table"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Query stat total (unofficial)",
+  "uid": "c5f3eea4-501c-439d-8873-1cc9e52314e7",
+  "version": 3,
+  "weekStart": ""
+}
